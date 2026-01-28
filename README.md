@@ -1,51 +1,62 @@
 # OnDeviceTranscriber
 
-App multiplataforma (iOS + macOS) para transcrição de áudio de alta qualidade usando WhisperKit.
+Multiplatform app (iOS + macOS) for high-quality audio transcription using WhisperKit.
 
-## 🎯 Objetivo
-Transcrição on-device com interface minimalista:
-- Botão para gravar/transcrever
-- Output de texto
-- Integração com Shortcuts
-- Suporte a português brasileiro
+## 🎯 Objective
+On-device transcription with minimalist interface:
+- Record/transcribe button
+- Text output
+- Shortcuts integration
+- Portuguese Brazilian support (with multilingual capability)
 
-## 🏗️ Estrutura
-- **Shared/**: Código compartilhado entre iOS e macOS
+## 🏗️ Structure
+- **Shared/**: Code shared between iOS and macOS
   - **Views/**: SwiftUI views
-  - **Services/**: Lógica de negócio (WhisperKit)
-  - **Intents/**: Integração com Shortcuts
+  - **Services/**: Business logic (WhisperKit)
+  - **Intents/**: Shortcuts integration
   - **Models/**: Data models
-- **iOS/**: Configurações específicas do iOS
-- **macOS/**: Configurações específicas do macOS
+- **iOS/**: iOS-specific configurations
+- **macOS/**: macOS-specific configurations
 
-## 🛠️ Tecnologias
+## 🛠️ Technologies
 - SwiftUI (100% - zero Storyboards/XIBs)
-- WhisperKit (on-device Whisper para Apple Silicon)
+- WhisperKit (on-device Whisper for Apple Silicon)
 - App Intents (Shortcuts)
 
-## 📋 Requisitos
-- **iOS**: 17+ (iPhone 13+ recomendado para WhisperKit)
-- **macOS**: 14+ (Apple Silicon recomendado)
+## 📋 Requirements
+- **iOS**: 17+ (iPhone 13+ recommended for WhisperKit)
+- **macOS**: 14+ (Apple Silicon recommended)
 - Xcode 15+
 
-## 🚀 Desenvolvimento
-- Código editado principalmente via Claude Code
-- Xcode usado para build, debug e testes em device
-- Arquitetura: MVVM com SwiftUI
+## 🚀 Development
+- Code primarily edited via Claude Code
+- Xcode used for build, debug, and device testing
+- Architecture: MVVM with SwiftUI
 
-## 📦 Instalação
+## 📦 Installation
 
-### Dependências
+### Dependencies
 - WhisperKit (via Swift Package Manager)
 
 ### Setup
-1. Clone o repositório
-2. Abra `OnDeviceTranscriber.xcodeproj` no Xcode
-3. Selecione seu target (iOS ou macOS)
+1. Clone the repository
+2. Open `OnDeviceTranscriber.xcodeproj` in Xcode
+3. Select your target (iOS or macOS)
 4. Build & Run (Cmd+R)
 
 ## 🎨 Design Decisions
-- **UI**: Minimalista - botão + texto
-- **STT Model**: WhisperKit small/distil-large-v3 (melhor balanço qualidade/velocidade)
-- **Multiplatform**: Código compartilhado máximo
-- **On-device**: Zero dependência de cloud/APIs externas
+- **UI**: Minimalist - button + text
+- **STT Model**: WhisperKit small/distil-large-v3 (best quality/speed balance)
+- **Multiplatform**: Maximum shared code
+- **On-device**: Zero cloud/external API dependencies
+
+## 🌍 Language Support
+- Primary: Portuguese Brazilian
+- Supports 90+ languages via Whisper multilingual models
+- On-device means complete privacy
+
+## 📝 License
+MIT License
+
+## 👨‍💻 Author
+Felipe Mendes dos Santos
