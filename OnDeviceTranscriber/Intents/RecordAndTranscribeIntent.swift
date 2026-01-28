@@ -57,28 +57,40 @@ struct RecordAndTranscribeIntent: AppIntent {
     /// - Returns: The transcribed text as a string result.
     @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        let service = WhisperService.shared
+        do {
+            let service = WhisperService.shared
 
-        // Ensure model is loaded
-        if !service.isModelLoaded {
-            try await service.loadModel()
+            // Ensure model is loaded
+            if !service.isModelLoaded {
+                try await service.loadModel()
+            }
+
+            // Check microphone permission
+            let permission = checkMicrophonePermission()
+            guard permission == .authorized else {
+                throw RecordAndTranscribeError.microphonePermissionRequired
+            }
+
+            // Determine language (nil for auto-detect)
+            let transcriptionLanguage: String? = language.lowercased() == "auto" ? nil : language
+
+            // Record with background settings (5s silence, audio feedback)
+            let result = try await service.recordInBackgroundAndTranscribe(
+                language: transcriptionLanguage
+            )
+
+            return .result(value: result.text)
+
+        } catch let error as RecordAndTranscribeError {
+            // Re-throw our own errors as-is
+            throw error
+        } catch let error as TranscriptionError {
+            // Convert TranscriptionError to user-friendly message
+            throw RecordAndTranscribeError.transcriptionError(error.errorDescription ?? "Unknown error")
+        } catch {
+            // Wrap any other errors
+            throw RecordAndTranscribeError.unknownError(error.localizedDescription)
         }
-
-        // Check microphone permission
-        let permission = checkMicrophonePermission()
-        guard permission == .authorized else {
-            throw RecordAndTranscribeError.microphonePermissionRequired
-        }
-
-        // Determine language (nil for auto-detect)
-        let transcriptionLanguage: String? = language.lowercased() == "auto" ? nil : language
-
-        // Record with background settings (5s silence, audio feedback)
-        let result = try await service.recordInBackgroundAndTranscribe(
-            language: transcriptionLanguage
-        )
-
-        return .result(value: result.text)
     }
 }
 
@@ -89,15 +101,21 @@ enum RecordAndTranscribeError: Swift.Error, CustomLocalizedStringResourceConvert
     case microphonePermissionRequired
     case modelNotReady
     case recordingFailed(String)
+    case transcriptionError(String)
+    case unknownError(String)
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
         case .microphonePermissionRequired:
             return "Microphone permission is required. Please open OnDeviceTranscriber and grant microphone access."
         case .modelNotReady:
-            return "Transcription model is not ready. Please open OnDeviceTranscriber to download the model."
+            return "Transcription model is not ready. Please open OnDeviceTranscriber to download the model first."
         case .recordingFailed(let message):
             return "Recording failed: \(message)"
+        case .transcriptionError(let message):
+            return "Transcription error: \(message)"
+        case .unknownError(let message):
+            return "Error: \(message)"
         }
     }
 }

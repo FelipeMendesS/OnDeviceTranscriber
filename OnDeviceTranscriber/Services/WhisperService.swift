@@ -48,8 +48,7 @@ enum TranscriptionConfig: Sendable {
 
     /// Default WhisperKit model to use.
     /// Options: "tiny", "base", "small", "medium", "large-v3"
-    /// Using large-v3 for best Portuguese accuracy.
-    static let defaultModel = "large-v3"
+    static let defaultModel = "small"
 
     /// Default language for transcription.
     /// Use "pt" for Portuguese, "en" for English, or nil for auto-detect.

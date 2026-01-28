@@ -29,7 +29,7 @@ enum TranscriptionConfig {
     static let backgroundMaxDuration: TimeInterval = 300
 
     // Model settings
-    static let defaultModel = "large-v3"               // Best Portuguese accuracy (~1.5GB)
+    static let defaultModel = "small"                  // Good balance of speed and accuracy
     static let defaultLanguage = "pt"                  // Portuguese Brazilian
 
     // Audio settings
