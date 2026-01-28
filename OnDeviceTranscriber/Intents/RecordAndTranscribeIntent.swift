@@ -10,6 +10,9 @@
 import AppIntents
 import Foundation
 import AVFoundation
+import os.log
+
+private let intentLogger = Logger(subsystem: "com.ondevicetranscriber", category: "RecordAndTranscribeIntent")
 
 /// App Intent that records audio in background and returns transcribed text.
 /// Triggered from Shortcuts, runs without opening app UI.
@@ -57,28 +60,57 @@ struct RecordAndTranscribeIntent: AppIntent {
     /// - Returns: The transcribed text as a string result.
     @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        intentLogger.info("=== RecordAndTranscribeIntent.perform() STARTED ===")
+
         let service = WhisperService.shared
 
-        // Ensure model is loaded
+        // Step 1: Load model if needed
+        intentLogger.info("Step 1: Checking model state - isModelLoaded: \(service.isModelLoaded)")
         if !service.isModelLoaded {
-            try await service.loadModel()
+            intentLogger.info("Model not loaded, loading now...")
+            do {
+                try await service.loadModel()
+                intentLogger.info("Model loaded successfully")
+            } catch {
+                intentLogger.error("Model load failed: \(error.localizedDescription)")
+                throw RecordAndTranscribeError.modelNotReady(reason: error.localizedDescription)
+            }
         }
 
-        // Check microphone permission
+        // Step 2: Check microphone permission
+        intentLogger.info("Step 2: Checking microphone permission")
         let permission = checkMicrophonePermission()
+        intentLogger.info("Microphone permission status: \(String(describing: permission.rawValue))")
         guard permission == .authorized else {
+            intentLogger.error("Microphone permission not authorized: \(String(describing: permission.rawValue))")
             throw RecordAndTranscribeError.microphonePermissionRequired
         }
 
-        // Determine language (nil for auto-detect)
+        // Step 3: Determine language
         let transcriptionLanguage: String? = language.lowercased() == "auto" ? nil : language
+        intentLogger.info("Step 3: Language set to: \(transcriptionLanguage ?? "auto-detect")")
 
-        // Record with background settings (5s silence, audio feedback)
-        let result = try await service.recordInBackgroundAndTranscribe(
-            language: transcriptionLanguage
-        )
-
-        return .result(value: result.text)
+        // Step 4: Record and transcribe
+        intentLogger.info("Step 4: Starting recordInBackgroundAndTranscribe...")
+        do {
+            let result = try await service.recordInBackgroundAndTranscribe(
+                language: transcriptionLanguage
+            )
+            intentLogger.info("=== RecordAndTranscribeIntent.perform() SUCCESS ===")
+            intentLogger.info("Transcribed text length: \(result.text.count) characters")
+            return .result(value: result.text)
+        } catch let error as TranscriptionError {
+            intentLogger.error("TranscriptionError: \(error.localizedDescription)")
+            throw RecordAndTranscribeError.transcriptionFailed(reason: error.localizedDescription)
+        } catch is CancellationError {
+            intentLogger.error("CancellationError caught - task was cancelled")
+            throw RecordAndTranscribeError.operationCancelled
+        } catch {
+            intentLogger.error("Unexpected error: \(type(of: error)) - \(error.localizedDescription)")
+            // Log full error details for debugging
+            intentLogger.error("Full error: \(String(describing: error))")
+            throw RecordAndTranscribeError.recordingFailed(reason: error.localizedDescription)
+        }
     }
 }
 
@@ -87,17 +119,23 @@ struct RecordAndTranscribeIntent: AppIntent {
 /// Errors specific to the RecordAndTranscribeIntent
 enum RecordAndTranscribeError: Swift.Error, CustomLocalizedStringResourceConvertible {
     case microphonePermissionRequired
-    case modelNotReady
-    case recordingFailed(String)
+    case modelNotReady(reason: String)
+    case recordingFailed(reason: String)
+    case transcriptionFailed(reason: String)
+    case operationCancelled
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
         case .microphonePermissionRequired:
             return "Microphone permission is required. Please open OnDeviceTranscriber and grant microphone access."
-        case .modelNotReady:
-            return "Transcription model is not ready. Please open OnDeviceTranscriber to download the model."
-        case .recordingFailed(let message):
-            return "Recording failed: \(message)"
+        case .modelNotReady(let reason):
+            return "Transcription model is not ready: \(reason). Please open OnDeviceTranscriber to download the model."
+        case .recordingFailed(let reason):
+            return "Recording failed: \(reason)"
+        case .transcriptionFailed(let reason):
+            return "Transcription error: \(reason)"
+        case .operationCancelled:
+            return "Operation was cancelled. This may happen if the Shortcut times out. Try again or use the app directly for longer recordings."
         }
     }
 }

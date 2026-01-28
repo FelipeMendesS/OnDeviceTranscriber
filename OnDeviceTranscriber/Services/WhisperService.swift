@@ -10,6 +10,11 @@ import Foundation
 import WhisperKit
 import Combine
 import AVFoundation
+import os.log
+
+// MARK: - Logging
+
+private let logger = Logger(subsystem: "com.ondevicetranscriber", category: "WhisperService")
 
 // MARK: - Configuration
 
@@ -47,7 +52,12 @@ enum TranscriptionConfig: Sendable {
     // MARK: Model Settings
 
     /// Default WhisperKit model to use.
-    /// Options: "tiny", "small", "base", "distil-large-v3"
+    /// Available models (speed vs accuracy tradeoff):
+    /// - "tiny", "tiny.en" (~39M params, ~75MB) - Fastest, lowest accuracy
+    /// - "base", "base.en" (~74M params, ~150MB) - Fast, basic accuracy
+    /// - "small", "small.en" (~244M params, ~500MB) - Balanced
+    /// - "large-v3_turbo" (~809M params, ~1GB) - Good accuracy, optimized speed
+    /// - "distil-large-v3" (~756M params, ~900MB) - Near large-v3 accuracy, much faster
     static let defaultModel = "small"
 
     /// Default language for transcription.
@@ -58,6 +68,9 @@ enum TranscriptionConfig: Sendable {
 
     /// Sample rate expected by WhisperKit (do not change).
     static let sampleRate: Int = 16000
+
+    /// Model repository on HuggingFace
+    static let modelRepo = "argmaxinc/whisperkit-coreml"
 }
 
 // MARK: - WhisperService
@@ -95,53 +108,105 @@ final class WhisperService: ObservableObject {
     private var currentModelName: String?
     private let audioRecorder = AudioRecorderService()
 
+    /// Persistent storage directory for WhisperKit models
+    private var modelStorageDirectory: URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let modelsDir = appSupport.appendingPathComponent("WhisperKitModels", isDirectory: true)
+        // Ensure directory exists
+        try? FileManager.default.createDirectory(at: modelsDir, withIntermediateDirectories: true)
+        return modelsDir
+    }
+
     // MARK: - Initialization
 
     private init() {
-        // Private init for singleton
+        logger.info("WhisperService initialized")
     }
 
     // MARK: - Model Management
 
     /// Loads the specified WhisperKit model.
-    /// Downloads the model if not already cached.
+    /// Downloads the model if not already cached on disk.
     ///
     /// - Parameter modelName: Name of the model to load (default: from config)
     /// - Throws: `TranscriptionError.modelDownloadFailed` or `modelLoadFailed`
     func loadModel(named modelName: String = TranscriptionConfig.defaultModel) async throws {
-        // Skip if already loaded with same model
-        if isModelLoaded && currentModelName == modelName {
+        logger.info("loadModel called for model: \(modelName)")
+
+        // Skip if already loaded with same model in memory
+        if isModelLoaded && currentModelName == modelName && whisperKit != nil {
+            logger.info("Model already loaded in memory, skipping")
             return
         }
 
         isDownloading = true
         loadProgress = 0
-        statusMessage = "Preparing model..."
 
         do {
-            statusMessage = "Downloading model (this may take a while)..."
+            // Check if model exists on disk
+            let modelPath = modelStorageDirectory.appendingPathComponent(modelName)
+            let modelExistsOnDisk = FileManager.default.fileExists(atPath: modelPath.path)
 
-            // Initialize WhisperKit - it will download and load the model
-            whisperKit = try await WhisperKit(model: modelName)
+            if modelExistsOnDisk {
+                statusMessage = "Loading model from disk..."
+                logger.info("Model found on disk at: \(modelPath.path)")
+            } else {
+                statusMessage = "Downloading model..."
+                logger.info("Model not found on disk, will download to: \(modelPath.path)")
+            }
+
+            // Create WhisperKit config with our storage folder and progress callback
+            let config = WhisperKitConfig(
+                model: modelName,
+                modelRepo: TranscriptionConfig.modelRepo,
+                modelFolder: modelStorageDirectory.path,
+                download: !modelExistsOnDisk,
+                verbose: true,
+                prewarm: true
+            )
+
+            logger.info("Creating WhisperKit with config - download: \(!modelExistsOnDisk)")
+
+            // Initialize WhisperKit with progress tracking
+            whisperKit = try await WhisperKit(config) { progress in
+                Task { @MainActor in
+                    self.loadProgress = Float(progress.fractionCompleted)
+                    let percent = Int(progress.fractionCompleted * 100)
+                    if progress.fractionCompleted < 1.0 {
+                        self.statusMessage = "Downloading model... \(percent)%"
+                    }
+                    logger.debug("Download progress: \(percent)%")
+                }
+            }
 
             isModelLoaded = true
             currentModelName = modelName
             isDownloading = false
             loadProgress = 1.0
             statusMessage = "Ready"
+            logger.info("Model loaded successfully: \(modelName)")
 
         } catch {
             isDownloading = false
             isModelLoaded = false
             loadProgress = 0
             statusMessage = "Model load failed"
+            logger.error("Model load failed: \(error.localizedDescription)")
             throw TranscriptionError.modelLoadFailed(underlying: error)
         }
     }
 
-    /// Checks if the model is downloaded (cached) without loading it.
+    /// Checks if the model is downloaded (cached) on disk.
     func isModelDownloaded(modelName: String = TranscriptionConfig.defaultModel) -> Bool {
-        return isModelLoaded && currentModelName == modelName
+        let modelPath = modelStorageDirectory.appendingPathComponent(modelName)
+        let exists = FileManager.default.fileExists(atPath: modelPath.path)
+        logger.debug("isModelDownloaded(\(modelName)): \(exists) at \(modelPath.path)")
+        return exists
+    }
+
+    /// Returns true if the model is loaded in memory and ready to use.
+    func isModelReady(modelName: String = TranscriptionConfig.defaultModel) -> Bool {
+        return isModelLoaded && currentModelName == modelName && whisperKit != nil
     }
 
     // MARK: - Transcription Methods

@@ -10,10 +10,13 @@ import Foundation
 import AVFoundation
 import Combine
 import AudioToolbox
+import os.log
 
 #if os(iOS)
 import UIKit
 #endif
+
+private let recorderLogger = Logger(subsystem: "com.ondevicetranscriber", category: "AudioRecorder")
 
 /// Service responsible for recording audio from the microphone.
 /// Uses AVAudioEngine for low-latency access to audio buffers.
@@ -48,10 +51,21 @@ final class AudioRecorderService: ObservableObject {
     /// Starts recording audio from the microphone.
     /// - Throws: `TranscriptionError.recordingStartFailed` if recording cannot start.
     func startRecording() throws {
-        guard !isRecording else { return }
+        recorderLogger.info("startRecording() called, isRecording: \(self.isRecording)")
+        guard !isRecording else {
+            recorderLogger.info("Already recording, returning early")
+            return
+        }
 
         // Configure audio session (iOS only)
-        try configureAudioSession()
+        recorderLogger.info("Configuring audio session...")
+        do {
+            try configureAudioSession()
+            recorderLogger.info("Audio session configured successfully")
+        } catch {
+            recorderLogger.error("Audio session configuration failed: \(error.localizedDescription)")
+            throw TranscriptionError.recordingStartFailed(underlying: error)
+        }
 
         // Reset state
         audioBuffer = []
@@ -63,12 +77,16 @@ final class AudioRecorderService: ObservableObject {
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
 
+        recorderLogger.info("Recording format - sampleRate: \(recordingFormat.sampleRate), channels: \(recordingFormat.channelCount)")
+
         // Validate format
         guard recordingFormat.sampleRate > 0 else {
+            recorderLogger.error("Invalid recording format - sampleRate is 0")
             throw TranscriptionError.recordingStartFailed(underlying: nil)
         }
 
         // Install tap to capture audio
+        recorderLogger.info("Installing audio tap on input node...")
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
             Task { @MainActor in
                 self?.processAudioBuffer(buffer)
@@ -76,11 +94,14 @@ final class AudioRecorderService: ObservableObject {
         }
 
         // Start the audio engine
+        recorderLogger.info("Starting audio engine...")
         do {
             try audioEngine.start()
             isRecording = true
             startDurationTimer()
+            recorderLogger.info("Audio engine started successfully, recording in progress")
         } catch {
+            recorderLogger.error("Audio engine start failed: \(error.localizedDescription)")
             inputNode.removeTap(onBus: 0)
             throw TranscriptionError.recordingStartFailed(underlying: error)
         }
@@ -115,7 +136,11 @@ final class AudioRecorderService: ObservableObject {
 
     /// Cancels recording without returning data.
     func cancelRecording() {
-        guard isRecording else { return }
+        recorderLogger.info("cancelRecording() called, isRecording: \(self.isRecording)")
+        guard isRecording else {
+            recorderLogger.info("Not recording, nothing to cancel")
+            return
+        }
 
         audioEngine.stop()
         audioEngine.inputNode.removeTap(onBus: 0)
@@ -130,8 +155,12 @@ final class AudioRecorderService: ObservableObject {
         deactivateAudioSession()
 
         // If VAD is waiting, cancel it
-        vadContinuation?.resume(throwing: TranscriptionError.cancelled)
-        vadContinuation = nil
+        if vadContinuation != nil {
+            recorderLogger.info("Resuming VAD continuation with cancelled error")
+            vadContinuation?.resume(throwing: TranscriptionError.cancelled)
+            vadContinuation = nil
+        }
+        recorderLogger.info("Recording cancelled successfully")
     }
 
     // MARK: - VAD Recording (for Shortcuts)
@@ -152,45 +181,98 @@ final class AudioRecorderService: ObservableObject {
         maxDuration: TimeInterval = TranscriptionConfig.maxRecordingDuration,
         playFeedback: Bool = false
     ) async throws -> [Float] {
+        recorderLogger.info("recordWithVAD started - threshold: \(silenceThreshold), silenceDuration: \(silenceDuration)s, maxDuration: \(maxDuration)s, feedback: \(playFeedback)")
 
         // Store VAD config for use in checkVAD
         currentVADConfig = (silenceThreshold, silenceDuration)
 
         // Play start feedback if requested
         if playFeedback {
+            recorderLogger.info("Playing start feedback")
             playStartFeedback()
+            // Small delay to allow the system sound to play before starting recording
+            try await Task.sleep(for: .milliseconds(300))
         }
 
         // Start recording
-        try startRecording()
+        recorderLogger.info("Starting recording...")
+        do {
+            try startRecording()
+            recorderLogger.info("Recording started successfully")
+        } catch {
+            recorderLogger.error("Failed to start recording: \(error.localizedDescription)")
+            currentVADConfig = nil
+            throw error
+        }
+
+        // Track the timeout task so we can cancel it
+        var timeoutTask: Task<Void, Never>?
 
         // Wait for VAD to trigger or max duration
-        let buffer: [Float] = try await withCheckedThrowingContinuation { continuation in
-            self.vadContinuation = continuation
+        let buffer: [Float]
+        do {
+            buffer = try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    self.vadContinuation = continuation
+                    recorderLogger.info("VAD continuation set, waiting for silence detection or timeout")
 
-            // Set up max duration timeout
-            Task {
-                try await Task.sleep(for: .seconds(maxDuration))
+                    // Set up max duration timeout (non-throwing to avoid CancellationError propagation)
+                    timeoutTask = Task { @MainActor in
+                        do {
+                            try await Task.sleep(for: .seconds(maxDuration))
+                            recorderLogger.info("Max duration reached (\(maxDuration)s)")
 
-                // If still recording after max duration, stop
-                if self.isRecording {
-                    let buffer = self.stopRecording()
-                    self.vadContinuation?.resume(returning: buffer)
-                    self.vadContinuation = nil
+                            // If still recording after max duration, stop
+                            if self.isRecording {
+                                recorderLogger.info("Stopping due to max duration")
+                                let recordedBuffer = self.stopRecording()
+                                self.vadContinuation?.resume(returning: recordedBuffer)
+                                self.vadContinuation = nil
+                            }
+                        } catch {
+                            // Task was cancelled, this is expected when VAD stops recording early
+                            recorderLogger.debug("Timeout task cancelled (expected if VAD triggered): \(error.localizedDescription)")
+                        }
+                    }
+                }
+            } onCancel: {
+                recorderLogger.warning("recordWithVAD task was cancelled externally")
+                Task { @MainActor in
+                    timeoutTask?.cancel()
+                    if self.isRecording {
+                        self.cancelRecording()
+                    }
                 }
             }
 
-            // VAD monitoring is done in processAudioBuffer
+            recorderLogger.info("VAD recording completed, buffer size: \(buffer.count) samples")
+
+        } catch {
+            recorderLogger.error("recordWithVAD error: \(error.localizedDescription)")
+            timeoutTask?.cancel()
+            currentVADConfig = nil
+
+            // Make sure recording is stopped on error
+            if isRecording {
+                cancelRecording()
+            }
+
+            throw error
         }
+
+        // Cancel timeout task if it's still running
+        timeoutTask?.cancel()
 
         // Clear VAD config
         currentVADConfig = nil
 
         // Play stop feedback if requested
         if playFeedback {
+            recorderLogger.info("Playing stop feedback")
             playStopFeedback()
         }
 
+        recorderLogger.info("recordWithVAD returning \(buffer.count) samples")
         return buffer
     }
 
@@ -264,16 +346,23 @@ final class AudioRecorderService: ObservableObject {
             // Below threshold - might be silence
             if silenceStartTime == nil {
                 silenceStartTime = Date()
-            } else if let start = silenceStartTime,
-                      Date().timeIntervalSince(start) >= requiredSilenceDuration {
-                // Silence duration exceeded - stop recording
-                let buffer = stopRecording()
-                vadContinuation?.resume(returning: buffer)
-                vadContinuation = nil
-                silenceStartTime = nil
+                recorderLogger.debug("VAD: Silence started (level: \(level) < threshold: \(threshold))")
+            } else if let start = silenceStartTime {
+                let silenceDuration = Date().timeIntervalSince(start)
+                if silenceDuration >= requiredSilenceDuration {
+                    // Silence duration exceeded - stop recording
+                    recorderLogger.info("VAD: Silence duration exceeded (\(silenceDuration)s >= \(requiredSilenceDuration)s), stopping")
+                    let buffer = stopRecording()
+                    vadContinuation?.resume(returning: buffer)
+                    vadContinuation = nil
+                    silenceStartTime = nil
+                }
             }
         } else {
             // Above threshold - reset silence timer
+            if silenceStartTime != nil {
+                recorderLogger.debug("VAD: Speech detected (level: \(level) >= threshold: \(threshold)), resetting silence timer")
+            }
             silenceStartTime = nil
         }
     }
