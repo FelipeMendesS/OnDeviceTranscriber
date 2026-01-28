@@ -46,21 +46,48 @@ enum Platform {
 
 /// Configures the audio session for recording (iOS only)
 /// On macOS, this is a no-op as audio sessions are not required.
-func configureAudioSession() throws {
+/// - Parameter forBackground: If true, configures for background Shortcut recording
+func configureAudioSession(forBackground: Bool = false) throws {
     #if os(iOS)
     let session = AVAudioSession.sharedInstance()
 
-    // Use playAndRecord to allow audio output (future enhancement: playback)
-    // Use default mode for general recording
-    // Use allowBluetooth for headset microphones
+    if forBackground {
+        // For background Shortcuts: use record category with mixWithOthers
+        // This allows recording without interrupting other audio
+        try session.setCategory(
+            .record,
+            mode: .default,
+            options: [.mixWithOthers, .allowBluetooth]
+        )
+    } else {
+        // For in-app UI: use playAndRecord for future playback features
+        try session.setCategory(
+            .playAndRecord,
+            mode: .default,
+            options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers]
+        )
+    }
+
+    // Activate the session with options to allow background operation
+    try session.setActive(true, options: [])
+    #endif
+}
+
+/// Configures audio session specifically for background recording
+/// Uses record-only category that works better with background intents
+func configureAudioSessionForBackground() throws {
+    #if os(iOS)
+    let session = AVAudioSession.sharedInstance()
+
+    // Use record category - more reliable for background operation
     try session.setCategory(
-        .playAndRecord,
+        .record,
         mode: .default,
-        options: [.defaultToSpeaker, .allowBluetooth]
+        options: [.mixWithOthers, .allowBluetooth]
     )
 
-    // Activate the session
-    try session.setActive(true)
+    // Activate with no special options
+    try session.setActive(true, options: [])
     #endif
 }
 
