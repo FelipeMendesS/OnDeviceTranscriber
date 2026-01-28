@@ -47,9 +47,9 @@ enum TranscriptionConfig: Sendable {
     // MARK: Model Settings
 
     /// Default WhisperKit model to use.
-    /// Options: "tiny", "small", "base", "distil-large-v3"
-    /// Using distil-large-v3 for best Portuguese accuracy.
-    static let defaultModel = "distil-large-v3"
+    /// Options: "tiny", "base", "small", "medium", "large-v3"
+    /// Using large-v3 for best Portuguese accuracy.
+    static let defaultModel = "large-v3"
 
     /// Default language for transcription.
     /// Use "pt" for Portuguese, "en" for English, or nil for auto-detect.
