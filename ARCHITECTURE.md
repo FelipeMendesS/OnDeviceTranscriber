@@ -18,10 +18,15 @@ These values are defined in `Services/WhisperService.swift` and can be easily ad
 
 ```swift
 enum TranscriptionConfig {
-    // Voice Activity Detection (VAD) - for Shortcuts recording
+    // Voice Activity Detection (VAD) - In-App UI
     static let silenceThreshold: Float = 0.01          // Audio level considered "silence"
     static let silenceDurationToStop: TimeInterval = 3.0  // Seconds of silence before auto-stop
     static let maxRecordingDuration: TimeInterval = 300   // 5 minutes max
+
+    // Voice Activity Detection (VAD) - Background Shortcuts
+    static let backgroundSilenceThreshold: Float = 0.01
+    static let backgroundSilenceDuration: TimeInterval = 5.0  // ← ITERATE ON THIS
+    static let backgroundMaxDuration: TimeInterval = 300
 
     // Model settings
     static let defaultModel = "small"                  // Options: tiny, small, distil-large-v3
@@ -32,7 +37,8 @@ enum TranscriptionConfig {
 }
 ```
 
-**To iterate on VAD behavior:** Adjust `silenceDurationToStop` (currently 3 seconds).
+**To iterate on background VAD behavior:** Adjust `backgroundSilenceDuration` (currently 5 seconds).
+The longer duration allows natural pauses while speaking without triggering auto-stop.
 
 ---
 
@@ -61,9 +67,17 @@ final class WhisperService: ObservableObject {
 | Context | Mode | Behavior |
 |---------|------|----------|
 | **In-App UI** | Manual | User taps Record → speaks → taps Stop. No time limit. |
-| **Shortcuts** | VAD + Timeout | Records until 3s of silence detected, max 5 minutes. |
+| **Background Shortcuts** | VAD + Audio Feedback | 🔊 Beep on start → speaks → 5s silence → 🔊 Beep on stop → transcribe |
 
-**Rationale:** Shortcuts have no UI for user interaction, so automatic stop detection is required.
+**Background Shortcuts Flow:**
+1. User triggers Shortcut (Action Button, Siri, widget)
+2. Stays in current app (no UI switch)
+3. Hears start beep + haptic feedback
+4. Speaks naturally
+5. After 5 seconds of silence, hears stop beep + haptic
+6. Transcription happens, text returns to Shortcuts
+
+**Rationale:** Background shortcuts have no UI, so audio/haptic feedback tells user when recording starts/stops.
 
 ### 3. Model Download Strategy
 

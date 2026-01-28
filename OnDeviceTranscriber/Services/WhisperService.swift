@@ -16,7 +16,7 @@ import AVFoundation
 /// Configurable constants for transcription behavior.
 /// Adjust these values to tune VAD sensitivity and other parameters.
 enum TranscriptionConfig: Sendable {
-    // MARK: Voice Activity Detection (VAD)
+    // MARK: Voice Activity Detection (VAD) - In-App UI
 
     /// Audio level (RMS) below which is considered silence.
     /// Range: 0.0 to 1.0. Lower = more sensitive to quiet sounds.
@@ -29,6 +29,20 @@ enum TranscriptionConfig: Sendable {
 
     /// Maximum recording duration in seconds (safety limit).
     static let maxRecordingDuration: TimeInterval = 300 // 5 minutes
+
+    // MARK: Voice Activity Detection (VAD) - Background Shortcuts
+
+    /// Silence threshold for background recording.
+    /// Same as regular threshold by default.
+    static let backgroundSilenceThreshold: Float = 0.01
+
+    /// Seconds of silence before auto-stopping in background mode.
+    /// **Longer than in-app to allow natural pauses while speaking.**
+    /// **ITERATE ON THIS VALUE: Adjust if recording stops too early or too late.**
+    static let backgroundSilenceDuration: TimeInterval = 5.0
+
+    /// Maximum recording duration for background shortcuts.
+    static let backgroundMaxDuration: TimeInterval = 300 // 5 minutes
 
     // MARK: Model Settings
 
@@ -414,6 +428,31 @@ final class WhisperService: ObservableObject {
         statusMessage = "Listening..."
 
         let audioBuffer = try await audioRecorder.recordWithVAD()
+
+        guard !audioBuffer.isEmpty else {
+            throw TranscriptionError.noAudioCaptured
+        }
+
+        return try await transcribe(audioBuffer: audioBuffer, language: language)
+    }
+
+    /// Records audio in background mode with longer silence detection and audio feedback.
+    /// Used by background Shortcuts where user needs audio cues and longer pause tolerance.
+    ///
+    /// - Parameter language: Language code (nil for auto-detect)
+    /// - Returns: `TranscriptionResult` with the transcribed text
+    /// - Throws: `TranscriptionError` if recording or transcription fails
+    func recordInBackgroundAndTranscribe(
+        language: String? = TranscriptionConfig.defaultLanguage
+    ) async throws -> TranscriptionResult {
+        guard isModelLoaded else {
+            throw TranscriptionError.modelNotDownloaded
+        }
+
+        statusMessage = "Listening (background)..."
+
+        // Use background-specific recording with audio feedback
+        let audioBuffer = try await audioRecorder.recordForBackgroundShortcut()
 
         guard !audioBuffer.isEmpty else {
             throw TranscriptionError.noAudioCaptured

@@ -9,6 +9,11 @@
 import Foundation
 import AVFoundation
 import Combine
+import AudioToolbox
+
+#if os(iOS)
+import UIKit
+#endif
 
 /// Service responsible for recording audio from the microphone.
 /// Uses AVAudioEngine for low-latency access to audio buffers.
@@ -36,6 +41,7 @@ final class AudioRecorderService: ObservableObject {
     // VAD (Voice Activity Detection) properties
     private var silenceStartTime: Date?
     private var vadContinuation: CheckedContinuation<[Float], Error>?
+    private var currentVADConfig: (threshold: Float, silenceDuration: TimeInterval)?
 
     // MARK: - Recording Control
 
@@ -137,19 +143,29 @@ final class AudioRecorderService: ObservableObject {
     ///   - silenceThreshold: Audio level below which is considered silence
     ///   - silenceDuration: How long silence must persist before stopping
     ///   - maxDuration: Maximum recording duration regardless of speech
+    ///   - playFeedback: Whether to play audio/haptic feedback
     /// - Returns: Array of audio samples resampled to 16kHz
     /// - Throws: `TranscriptionError` if recording fails
     func recordWithVAD(
         silenceThreshold: Float = TranscriptionConfig.silenceThreshold,
         silenceDuration: TimeInterval = TranscriptionConfig.silenceDurationToStop,
-        maxDuration: TimeInterval = TranscriptionConfig.maxRecordingDuration
+        maxDuration: TimeInterval = TranscriptionConfig.maxRecordingDuration,
+        playFeedback: Bool = false
     ) async throws -> [Float] {
+
+        // Store VAD config for use in checkVAD
+        currentVADConfig = (silenceThreshold, silenceDuration)
+
+        // Play start feedback if requested
+        if playFeedback {
+            playStartFeedback()
+        }
 
         // Start recording
         try startRecording()
 
         // Wait for VAD to trigger or max duration
-        return try await withCheckedThrowingContinuation { continuation in
+        let buffer: [Float] = try await withCheckedThrowingContinuation { continuation in
             self.vadContinuation = continuation
 
             // Set up max duration timeout
@@ -166,6 +182,56 @@ final class AudioRecorderService: ObservableObject {
 
             // VAD monitoring is done in processAudioBuffer
         }
+
+        // Clear VAD config
+        currentVADConfig = nil
+
+        // Play stop feedback if requested
+        if playFeedback {
+            playStopFeedback()
+        }
+
+        return buffer
+    }
+
+    /// Records audio for background Shortcuts with longer silence detection.
+    /// Uses 5-second silence threshold and provides audio/haptic feedback.
+    ///
+    /// - Returns: Array of audio samples resampled to 16kHz
+    /// - Throws: `TranscriptionError` if recording fails
+    func recordForBackgroundShortcut() async throws -> [Float] {
+        return try await recordWithVAD(
+            silenceThreshold: TranscriptionConfig.backgroundSilenceThreshold,
+            silenceDuration: TranscriptionConfig.backgroundSilenceDuration,
+            maxDuration: TranscriptionConfig.backgroundMaxDuration,
+            playFeedback: true
+        )
+    }
+
+    // MARK: - Audio Feedback
+
+    /// Plays feedback sound and haptic when recording starts
+    private func playStartFeedback() {
+        // Play system sound (begin recording tone)
+        AudioServicesPlaySystemSound(1113) // Begin recording sound
+
+        // Haptic feedback on iOS
+        #if os(iOS)
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
+        #endif
+    }
+
+    /// Plays feedback sound and haptic when recording stops
+    private func playStopFeedback() {
+        // Play system sound (end recording tone)
+        AudioServicesPlaySystemSound(1114) // End recording sound
+
+        // Haptic feedback on iOS
+        #if os(iOS)
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
+        #endif
     }
 
     // MARK: - Private Methods
@@ -190,8 +256,9 @@ final class AudioRecorderService: ObservableObject {
     }
 
     private func checkVAD(level: Float) {
-        let threshold = TranscriptionConfig.silenceThreshold
-        let requiredSilenceDuration = TranscriptionConfig.silenceDurationToStop
+        // Use stored config or fall back to defaults
+        let threshold = currentVADConfig?.threshold ?? TranscriptionConfig.silenceThreshold
+        let requiredSilenceDuration = currentVADConfig?.silenceDuration ?? TranscriptionConfig.silenceDurationToStop
 
         if level < threshold {
             // Below threshold - might be silence

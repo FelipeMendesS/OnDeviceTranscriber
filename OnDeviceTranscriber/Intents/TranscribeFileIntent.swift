@@ -1,49 +1,48 @@
 //
-//  TranscribeIntent.swift
+//  TranscribeFileIntent.swift
 //  OnDeviceTranscriber
 //
-//  App Intent for Shortcuts integration.
-//  Allows transcription to be triggered from Shortcuts app workflows.
+//  App Intent for transcribing audio files via Shortcuts.
+//  Takes an audio file as input and returns transcribed text.
 //
 
 import AppIntents
 import Foundation
-import AVFoundation
 
-/// App Intent that transcribes audio and returns the text.
+/// App Intent that transcribes an audio file and returns the text.
 /// Can be triggered from the Shortcuts app on iOS and macOS.
 ///
 /// Usage in Shortcuts:
-/// - "Transcribe Audio" action appears in Shortcuts app
-/// - Optional: provide an audio file to transcribe
+/// - "Transcribe Audio File" action appears in Shortcuts app
+/// - Provide an audio file to transcribe
 /// - Optional: specify language (defaults to Portuguese)
 /// - Returns: transcribed text as string output
-struct TranscribeIntent: AppIntent {
+struct TranscribeFileIntent: AppIntent {
 
     // MARK: - Intent Metadata
 
     /// Title shown in Shortcuts app
-    static var title: LocalizedStringResource = "Transcribe Audio"
+    static var title: LocalizedStringResource = "Transcribe Audio File"
 
     /// Description shown in Shortcuts app
     static var description = IntentDescription(
-        "Records audio from the microphone or transcribes an audio file using on-device Whisper AI.",
+        "Transcribes an audio file using on-device Whisper AI and returns the text.",
         categoryName: "Transcription"
     )
 
-    /// Make this intent available from Shortcuts, Spotlight, and Siri
+    /// Run in background - don't need to open the app
     static var openAppWhenRun: Bool = false
 
     // MARK: - Parameters
 
-    /// Optional audio file to transcribe. If not provided, records from microphone.
+    /// Audio file to transcribe (required)
     @Parameter(
         title: "Audio File",
-        description: "An audio file to transcribe. If not provided, the app will record from your microphone.",
+        description: "The audio file to transcribe (WAV, M4A, MP3, etc.)",
         supportedTypeIdentifiers: ["public.audio"],
         inputConnectionBehavior: .connectToPreviousIntentResult
     )
-    var audioFile: IntentFile?
+    var audioFile: IntentFile
 
     /// Language for transcription. Defaults to Portuguese.
     @Parameter(
@@ -66,31 +65,15 @@ struct TranscribeIntent: AppIntent {
             try await service.loadModel()
         }
 
-        let result: TranscriptionResult
-
         // Determine language (nil for auto-detect)
         let transcriptionLanguage: String? = language.lowercased() == "auto" ? nil : language
 
-        if let audioFile = audioFile {
-            // Transcribe provided audio file
-            let data = audioFile.data
-            result = try await service.transcribe(
-                audioData: data,
-                language: transcriptionLanguage
-            )
-        } else {
-            // Record from microphone using VAD
-            // First check microphone permission
-            let permission = checkMicrophonePermission()
-
-            guard permission == .authorized else {
-                throw TranscribeIntentError.microphonePermissionRequired
-            }
-
-            result = try await service.recordWithVADAndTranscribe(
-                language: transcriptionLanguage
-            )
-        }
+        // Transcribe the audio file
+        let data = audioFile.data
+        let result = try await service.transcribe(
+            audioData: data,
+            language: transcriptionLanguage
+        )
 
         return .result(value: result.text)
     }
@@ -98,16 +81,16 @@ struct TranscribeIntent: AppIntent {
 
 // MARK: - Intent Errors
 
-/// Errors specific to the TranscribeIntent
-enum TranscribeIntentError: Swift.Error, CustomLocalizedStringResourceConvertible {
-    case microphonePermissionRequired
+/// Errors specific to the TranscribeFileIntent
+enum TranscribeFileIntentError: Swift.Error, CustomLocalizedStringResourceConvertible {
+    case invalidAudioFile
     case modelNotReady
     case transcriptionFailed(String)
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
-        case .microphonePermissionRequired:
-            return "Microphone permission is required. Please open OnDeviceTranscriber and grant microphone access."
+        case .invalidAudioFile:
+            return "The provided audio file could not be read or is in an unsupported format."
         case .modelNotReady:
             return "Transcription model is not ready. Please open OnDeviceTranscriber to download the model."
         case .transcriptionFailed(let message):

@@ -12,18 +12,32 @@ struct AppShortcuts: AppShortcutsProvider {
 
     /// The app shortcuts to provide
     static var appShortcuts: [AppShortcut] {
-        // Primary shortcut: Quick transcription from microphone
+        // Primary shortcut: Background voice recording and transcription
         AppShortcut(
-            intent: TranscribeIntent(),
+            intent: RecordAndTranscribeIntent(),
             phrases: [
-                "Transcribe with \(.applicationName)",
-                "Start transcription in \(.applicationName)",
                 "Record and transcribe with \(.applicationName)",
-                "Transcrever com \(.applicationName)",
-                "Iniciar transcrição no \(.applicationName)"
+                "Start voice transcription in \(.applicationName)",
+                "Transcribe my voice with \(.applicationName)",
+                "Gravar e transcrever com \(.applicationName)",
+                "Iniciar transcrição de voz no \(.applicationName)",
+                "Transcrever minha voz com \(.applicationName)"
             ],
-            shortTitle: "Transcribe Audio",
+            shortTitle: "Record & Transcribe",
             systemImageName: "mic.fill"
+        )
+
+        // Secondary shortcut: Transcribe audio file
+        AppShortcut(
+            intent: TranscribeFileIntent(),
+            phrases: [
+                "Transcribe audio file with \(.applicationName)",
+                "Transcribe file in \(.applicationName)",
+                "Transcrever arquivo de áudio com \(.applicationName)",
+                "Transcrever arquivo no \(.applicationName)"
+            ],
+            shortTitle: "Transcribe File",
+            systemImageName: "doc.text"
         )
     }
 }
