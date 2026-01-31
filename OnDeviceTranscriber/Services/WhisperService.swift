@@ -58,6 +58,7 @@ enum TranscriptionConfig: Sendable {
     /// - "small", "small.en" (~244M params, ~500MB) - Balanced
     /// - "large-v3_turbo" (~809M params, ~1GB) - Good accuracy, optimized speed
     /// - "distil-large-v3" (~756M params, ~900MB) - Near large-v3 accuracy, much faster
+    /// Options: "tiny", "base", "small", "medium", "large-v3"
     static let defaultModel = "small"
 
     /// Default language for transcription.

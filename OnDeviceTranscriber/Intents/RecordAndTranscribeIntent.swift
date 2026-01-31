@@ -2,9 +2,8 @@
 //  RecordAndTranscribeIntent.swift
 //  OnDeviceTranscriber
 //
-//  Background App Intent for Shortcuts integration.
-//  Records audio from microphone with VAD, transcribes, and returns text.
-//  Runs entirely in background - user stays in their current app.
+//  App Intent for Shortcuts integration.
+//  Opens minimal recording overlay, records, transcribes, and returns text.
 //
 
 import AppIntents
@@ -13,40 +12,27 @@ import AVFoundation
 import os.log
 
 private let intentLogger = Logger(subsystem: "com.ondevicetranscriber", category: "RecordAndTranscribeIntent")
+import SwiftUI
+import Combine
 
-/// App Intent that records audio in background and returns transcribed text.
-/// Triggered from Shortcuts, runs without opening app UI.
-///
-/// Features:
-/// - Runs 100% in background (user stays in current app)
-/// - Audio/haptic feedback when recording starts and stops
-/// - Automatic stop after 5 seconds of silence
-/// - Returns transcribed text to Shortcuts for chaining
-///
-/// Usage in Shortcuts:
-/// - "Record & Transcribe" action appears in Shortcuts app
-/// - Trigger via Action Button, Siri, or widget
-/// - Speak naturally, pause for 5 seconds when done
-/// - Transcribed text flows to next Shortcut action
+/// App Intent that opens a minimal recording overlay and returns transcribed text.
+/// Triggered from Shortcuts, opens briefly for recording then returns to previous app.
 struct RecordAndTranscribeIntent: AppIntent {
 
     // MARK: - Intent Metadata
 
-    /// Title shown in Shortcuts app
     static var title: LocalizedStringResource = "Record & Transcribe"
 
-    /// Description shown in Shortcuts app
     static var description = IntentDescription(
-        "Records audio from microphone in background, automatically stops after 5 seconds of silence, and returns transcribed text. You'll hear a sound when recording starts and stops.",
+        "Opens a minimal recording overlay. Speak, then tap to stop or wait for silence. Returns transcribed text.",
         categoryName: "Transcription"
     )
 
-    /// Run entirely in background - don't open the app
-    static var openAppWhenRun: Bool = false
+    /// Open app to show recording overlay
+    static var openAppWhenRun: Bool = true
 
     // MARK: - Parameters
 
-    /// Language for transcription. Defaults to Portuguese.
     @Parameter(
         title: "Language",
         description: "Language of the audio. Use 'auto' for automatic detection.",
@@ -56,8 +42,6 @@ struct RecordAndTranscribeIntent: AppIntent {
 
     // MARK: - Perform
 
-    /// Executes the recording and transcription intent.
-    /// - Returns: The transcribed text as a string result.
     @MainActor
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
         intentLogger.info("=== RecordAndTranscribeIntent.perform() STARTED ===")
@@ -84,7 +68,39 @@ struct RecordAndTranscribeIntent: AppIntent {
         guard permission == .authorized else {
             intentLogger.error("Microphone permission not authorized: \(String(describing: permission.rawValue))")
             throw RecordAndTranscribeError.microphonePermissionRequired
+        // Signal that we're launching from shortcut
+        IntentLaunchState.shared.isLaunchedFromIntent = true
+        IntentLaunchState.shared.language = language
+
+        // Wait for the recording to complete
+        let result = await withCheckedContinuation { continuation in
+            IntentLaunchState.shared.continuation = continuation
         }
+
+        // Reset state
+        IntentLaunchState.shared.isLaunchedFromIntent = false
+        IntentLaunchState.shared.continuation = nil
+
+        switch result {
+        case .success(let text):
+            return .result(value: text)
+        case .failure(let error):
+            if let transcriptionError = error as? TranscriptionError {
+                throw RecordAndTranscribeError.transcriptionError(
+                    transcriptionError.errorDescription ?? "Recording failed"
+                )
+            } else {
+                throw RecordAndTranscribeError.unknownError(error.localizedDescription)
+            }
+        }
+    }
+}
+
+// MARK: - Shared State for Intent Communication
+
+@MainActor
+final class IntentLaunchState: ObservableObject {
+    static let shared = IntentLaunchState()
 
         // Step 3: Determine language
         let transcriptionLanguage: String? = language.lowercased() == "auto" ? nil : language
@@ -111,18 +127,29 @@ struct RecordAndTranscribeIntent: AppIntent {
             intentLogger.error("Full error: \(String(describing: error))")
             throw RecordAndTranscribeError.recordingFailed(reason: error.localizedDescription)
         }
+    @Published var isLaunchedFromIntent = false
+    var language: String = "pt"
+    var continuation: CheckedContinuation<Result<String, Error>, Never>?
+
+    private init() {}
+
+    func completeWithResult(_ result: Result<String, Error>) {
+        continuation?.resume(returning: result)
     }
 }
 
 // MARK: - Intent Errors
 
-/// Errors specific to the RecordAndTranscribeIntent
 enum RecordAndTranscribeError: Swift.Error, CustomLocalizedStringResourceConvertible {
     case microphonePermissionRequired
     case modelNotReady(reason: String)
     case recordingFailed(reason: String)
     case transcriptionFailed(reason: String)
     case operationCancelled
+    case modelNotReady
+    case recordingFailed(String)
+    case transcriptionError(String)
+    case unknownError(String)
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
@@ -136,6 +163,14 @@ enum RecordAndTranscribeError: Swift.Error, CustomLocalizedStringResourceConvert
             return "Transcription error: \(reason)"
         case .operationCancelled:
             return "Operation was cancelled. This may happen if the Shortcut times out. Try again or use the app directly for longer recordings."
+        case .modelNotReady:
+            return "Transcription model is not ready. Please open OnDeviceTranscriber to download the model first."
+        case .recordingFailed(let message):
+            return "Recording failed: \(message)"
+        case .transcriptionError(let message):
+            return "Transcription error: \(message)"
+        case .unknownError(let message):
+            return "Error: \(message)"
         }
     }
 }

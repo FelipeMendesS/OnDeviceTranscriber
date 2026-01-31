@@ -46,9 +46,13 @@ final class AudioRecorderService: ObservableObject {
     private var vadContinuation: CheckedContinuation<[Float], Error>?
     private var currentVADConfig: (threshold: Float, silenceDuration: TimeInterval)?
 
+    // Track if we're in background mode
+    private var isBackgroundRecording = false
+
     // MARK: - Recording Control
 
     /// Starts recording audio from the microphone.
+    /// - Parameter forBackground: If true, configures for background Shortcut recording
     /// - Throws: `TranscriptionError.recordingStartFailed` if recording cannot start.
     func startRecording() throws {
         recorderLogger.info("startRecording() called, isRecording: \(self.isRecording)")
@@ -56,6 +60,10 @@ final class AudioRecorderService: ObservableObject {
             recorderLogger.info("Already recording, returning early")
             return
         }
+    func startRecording(forBackground: Bool = false) throws {
+        guard !isRecording else { return }
+
+        isBackgroundRecording = forBackground
 
         // Configure audio session (iOS only)
         recorderLogger.info("Configuring audio session...")
@@ -66,12 +74,27 @@ final class AudioRecorderService: ObservableObject {
             recorderLogger.error("Audio session configuration failed: \(error.localizedDescription)")
             throw TranscriptionError.recordingStartFailed(underlying: error)
         }
+        // Use background-specific configuration if running from Shortcut
+        #if os(iOS)
+        do {
+            if forBackground {
+                try configureAudioSessionForBackground()
+            } else {
+                try configureAudioSession()
+            }
+        } catch {
+            throw TranscriptionError.recordingStartFailed(underlying: error)
+        }
+        #endif
 
         // Reset state
         audioBuffer = []
         silenceStartTime = nil
         recordingStartTime = Date()
         recordingDuration = 0
+
+        // Reset the audio engine to ensure clean state
+        audioEngine.reset()
 
         // Get the input node and its format
         let inputNode = audioEngine.inputNode
@@ -96,6 +119,7 @@ final class AudioRecorderService: ObservableObject {
         // Start the audio engine
         recorderLogger.info("Starting audio engine...")
         do {
+            audioEngine.prepare()
             try audioEngine.start()
             isRecording = true
             startDurationTimer()
@@ -173,13 +197,15 @@ final class AudioRecorderService: ObservableObject {
     ///   - silenceDuration: How long silence must persist before stopping
     ///   - maxDuration: Maximum recording duration regardless of speech
     ///   - playFeedback: Whether to play audio/haptic feedback
+    ///   - forBackground: Whether this is a background Shortcut recording
     /// - Returns: Array of audio samples resampled to 16kHz
     /// - Throws: `TranscriptionError` if recording fails
     func recordWithVAD(
         silenceThreshold: Float = TranscriptionConfig.silenceThreshold,
         silenceDuration: TimeInterval = TranscriptionConfig.silenceDurationToStop,
         maxDuration: TimeInterval = TranscriptionConfig.maxRecordingDuration,
-        playFeedback: Bool = false
+        playFeedback: Bool = false,
+        forBackground: Bool = false
     ) async throws -> [Float] {
         recorderLogger.info("recordWithVAD started - threshold: \(silenceThreshold), silenceDuration: \(silenceDuration)s, maxDuration: \(maxDuration)s, feedback: \(playFeedback)")
 
@@ -207,6 +233,13 @@ final class AudioRecorderService: ObservableObject {
 
         // Track the timeout task so we can cancel it
         var timeoutTask: Task<Void, Never>?
+        // Small delay after feedback to ensure audio session is ready
+        if playFeedback {
+            try await Task.sleep(for: .milliseconds(300))
+        }
+
+        // Start recording with appropriate audio session config
+        try startRecording(forBackground: forBackground)
 
         // Wait for VAD to trigger or max duration
         let buffer: [Float]
@@ -278,6 +311,7 @@ final class AudioRecorderService: ObservableObject {
 
     /// Records audio for background Shortcuts with longer silence detection.
     /// Uses 5-second silence threshold and provides audio/haptic feedback.
+    /// Configures audio session specifically for background operation.
     ///
     /// - Returns: Array of audio samples resampled to 16kHz
     /// - Throws: `TranscriptionError` if recording fails
@@ -286,7 +320,8 @@ final class AudioRecorderService: ObservableObject {
             silenceThreshold: TranscriptionConfig.backgroundSilenceThreshold,
             silenceDuration: TranscriptionConfig.backgroundSilenceDuration,
             maxDuration: TranscriptionConfig.backgroundMaxDuration,
-            playFeedback: true
+            playFeedback: true,
+            forBackground: true  // Use background audio session config
         )
     }
 
